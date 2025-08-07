@@ -1,0 +1,69 @@
+# Global Configuration - Default values for all symbols
+default:
+  # Core Trading Parameters
+  symbol_name: "NIFTY25SEPFUT"
+  exchange: "NFO"
+  
+  # Gap Parameters
+  buy_gap: 25
+  sell_gap: 25
+  
+  # Order Management Parameters
+  buy_quantity: 75
+  sell_quantity: 75
+
+  cool_off_time: 10
+  product_type: "NRML"
+  tag: "WAVE_SCRAPER"
+  
+  # Risk Management Parameters (Delta Limits)
+  min_nifty_delta: -100
+  max_nifty_delta: 100
+  min_bank_nifty_delta: -100
+  max_bank_nifty_delta: 100
+  
+  # Greeks Calculation Parameters
+  interest_rate: 10.0
+  todays_volatility: 20.0
+  delta_calculation_days: 10
+  
+  # Margin Parameters
+  margin_spread: 100.0
+  margin_single_pe_ce: 100.0
+  margin_both_pe_ce: 100.0
+
+  # Order Type
+  order_type: "LIMIT"
+  variety: "REGULAR"
+
+# Symbol-specific configurations - only specify what differs from global
+# symbols:
+#   # NIFTY specific configuration - only overrides what's different
+#   NIFTY25SEPFUT:
+#     buy_gap: 30
+#     sell_gap: 30
+#     min_nifty_delta: -150
+#     max_nifty_delta: 150
+  
+  # BANKNIFTY specific configuration - only overrides what's different
+  # BANKNIFTY25SEPFUT:
+  #   buy_gap: 20
+  #   sell_gap: 20
+  #   buy_quantity: 25
+  #   sell_quantity: 25
+  #   min_bank_nifty_delta: -200
+  #   max_bank_nifty_delta: 200
+  #   todays_volatility: 25.0
+  #   margin_spread: 150.0
+  #   margin_single_pe_ce: 150.0
+  #   margin_both_pe_ce: 150.0
+  
+  # # Example: FINNIFTY - inherits everything from global
+  # FINNIFTY25SEPFUT: {}
+  
+  # # Example: MIDCPNIFTY - only changes quantity and gaps
+  # MIDCPNIFTY25SEPFUT:
+  #   buy_quantity: 50
+  #   sell_quantity: 50
+  #   buy_gap: 15
+  #   sell_gap: 15

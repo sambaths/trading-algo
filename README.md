@@ -103,8 +103,16 @@ from brokers.fyers import FyersBroker
 from brokers.zerodha import ZerodhaBroker
 
 # Initialize broker based on environment
+# ==================
+# IMPORTANT - Strategies mentioned here only work with without any code changes, For Fyers - Some Broker level changes 
+# is required, for instance - api response for positions, orders etc are different for Zerodha and Brokers
+# and would need to handled slighly different.
+# Althougth the Strategy Logic would remain unchanged, the places where broker methods are called users would have to
+# adapth the code accordingly for now until we are able to standardize the broker classes
+# ==================
 if os.getenv('BROKER_NAME') == 'fyers':
     broker = FyersBroker(symbols=['NSE:SBIN-EQ'])
+    # Fyers is not a stand-in replacement for Zerodha for these strategies
 else:
     broker = ZerodhaBroker(without_totp=True) # Only available for Zerodha
 
