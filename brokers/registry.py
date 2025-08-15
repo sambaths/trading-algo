@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Callable, Dict
 
 from .core.interface import BrokerDriver
+import logging
+
 
 
 class BrokerRegistry:
@@ -32,6 +34,7 @@ def register_default_brokers() -> None:
 
         BrokerRegistry.register("fyers", lambda: FyersDriver())
     except Exception:
+        logging.error("Error registering fyers driver", exc_info=True)
         pass
 
     try:
@@ -39,6 +42,7 @@ def register_default_brokers() -> None:
 
         BrokerRegistry.register("zerodha", lambda: ZerodhaDriver())
     except Exception:
+        logging.error("Error registering zerodha driver", exc_info=True)
         pass
 
     try:
@@ -46,6 +50,7 @@ def register_default_brokers() -> None:
 
         BrokerRegistry.register("fyrodha", lambda: FyrodhaDriver())
     except Exception:
+        logging.error("Error registering fyrodha driver", exc_info=True)
         pass
 
 

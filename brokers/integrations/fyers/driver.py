@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+from datetime import datetime
 import os
 from typing import Any, Dict, List, Optional
 
@@ -196,10 +196,19 @@ class FyersDriver(BrokerDriver):
         is_option = sym_u.endswith("CE") or sym_u.endswith("PE")
         is_index = sym_u.endswith("-INDEX")
         if is_future or is_option or is_index:
-            return f"{exch.value}:{tradingsymbol}"
+            if ":" not in tradingsymbol:
+                return f"{exch.value}:{tradingsymbol}"
+            else:
+                return tradingsymbol
         if not sym_u.endswith("-EQ"):
-            return f"{exch.value}:{tradingsymbol}-EQ"
-        return f"{exch.value}:{tradingsymbol}"
+            if ":" not in tradingsymbol:
+                return f"{exch.value}:{tradingsymbol}-EQ"
+            else:
+                return tradingsymbol
+        if ":" not in tradingsymbol:
+            return f"{exch.value}:{tradingsymbol}"
+        else:
+            return tradingsymbol
 
     # --- Account ---
     def get_funds(self) -> Funds:
@@ -295,8 +304,10 @@ class FyersDriver(BrokerDriver):
                 "validity": validity,
                 "disclosedQty": 0,
                 "offlineOrder": False,
+                "orderTag": request.tag,
             }
             payload.update(request.extras or {})
+            print(payload)
             resp = self._fyers_model.place_order(payload)
             if isinstance(resp, dict) and resp.get("s") == "ok":
                 result = OrderResponse(status="ok", order_id=str(resp.get("id") or resp.get("order_id")), raw=resp)
@@ -307,7 +318,10 @@ class FyersDriver(BrokerDriver):
                     except Exception:
                         pass
                 return result
-            return OrderResponse(status="error", order_id=None, message=str(resp), raw=resp if isinstance(resp, dict) else None)
+            if isinstance(resp, dict) and resp.get("s") == "error":
+                return OrderResponse(status="error", order_id=str(resp.get("id") or resp.get("order_id")), raw=resp if isinstance(resp, dict) else None)
+            
+            return OrderResponse(status="error", order_id=-1, message=str(resp), raw=resp if isinstance(resp, dict) else None)
         except Exception as e:  # noqa: BLE001
             # Emit synthetic error update
             if getattr(self, "_on_orders_cb", None):
@@ -467,7 +481,7 @@ class FyersDriver(BrokerDriver):
                     "volume": vol,
                 })
             return out
-        except Exception:
+        except Exception as E:
             return []
 
     # --- Instruments ---
@@ -514,6 +528,7 @@ class FyersDriver(BrokerDriver):
             "Expiry date": "expiry",
             "Symbol ticker": "symbol",
             "Exchange": "exchange",
+            "Strike price": "strike",
             "Segment": "segment",
             "Scrip code": "scrip_code",
             "Underlying symbol": "underlying_symbol"
@@ -525,9 +540,10 @@ class FyersDriver(BrokerDriver):
         df.columns = header_mapping.values()
         # df['instrument_type'] = df['instrument_type'].map(self.instrument_types) # MAPPING TO STOCK/INDEX TODO - NOT USED MAYBE
         df['instrument_type'] = df['symbol'].apply(lambda x: 'FUT' if x.endswith("FUT") else 'CE' if x.endswith("CE") else 'PE' if x.endswith("PE") else 'EQ')
-        df['expiry'] = pd.to_datetime(df['expiry']).dt.date
+        df['expiry'] = pd.to_datetime(df['expiry'], unit='s').dt.date
         df['days_to_expiry'] = df['expiry'].apply(lambda x: np.busday_count(datetime.now().date(), x) + 1 if not pd.isna(x) else np.nan)
-
+        # Updating Segment matching to match with what we have in the zerodha
+        df['segment'] = df['symbol'].apply(lambda x: "NFO-FUT" if x.endswith("FUT") else "NFO-OPT")
         self.master_contract_df = df
 
     def get_instruments(self) -> List[Instrument]:

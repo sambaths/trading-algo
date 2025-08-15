@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from .enums import Exchange, OrderType, ProductType, TransactionType, Validity
@@ -105,9 +107,63 @@ class BrokerGateway:
         return self.driver.get_quotes(broker_symbols)
 
     def get_history(self, symbol: str, interval: str, start: str, end: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve historical data with automatic chunking to handle API limitations.
+        
+        Args:
+            symbol (str): Trading symbol
+            interval (str): Timeframe interval (e.g., "1m", "5m", "1d")
+            start (str): Start date in format YYYY-MM-DD
+            end (str): End date in format YYYY-MM-DD
+            
+        Returns:
+            List[Dict[str, Any]]: Combined historical data from all chunks
+        """
         internal = symbol_registry.normalize(symbol)
         broker_symbol = symbol_registry.to_broker_symbol(self.broker_name, internal)
-        return self.driver.get_history(broker_symbol, interval, start, end)
+        
+        # Convert string dates to datetime objects
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt = datetime.strptime(end, "%Y-%m-%d")
+        
+        # Determine chunk size based on interval
+        if interval in ["day", "1d", "D", "1D"]:
+            # For daily resolution: up to 366 days per request
+            max_days = 366
+        elif interval in ["5S", "10S", "15S", "30S", "45S"]:
+            # For seconds resolution: up to 30 trading days
+            max_days = 30
+        else:
+            # For minute resolutions: up to 100 days per request
+            max_days = 100
+        
+        # Initialize result container
+        all_candles = []
+        
+        # Break the date range into chunks
+        current_start = start_dt
+        while current_start <= end_dt:
+            # Calculate end date for this chunk
+            current_end = min(current_start + timedelta(days=max_days - 1), end_dt)
+            
+            # Format dates for API request
+            chunk_start = current_start.strftime("%Y-%m-%d")
+            chunk_end = current_end.strftime("%Y-%m-%d")
+            
+            # Get data for this chunk
+            chunk_data = self.driver.get_history(broker_symbol, interval, chunk_start, chunk_end)
+            
+            # Extend results with chunk data
+            if chunk_data:
+                all_candles.extend(chunk_data)
+            
+            # Add a small delay to avoid rate limiting
+            time.sleep(0.5)
+            
+            # Move to next chunk
+            current_start = current_end + timedelta(days=1)
+        
+        return all_candles
 
     # --- Option chain ---
     def get_option_chain(self, underlying: str, exchange: str, **kwargs: Any) -> List[Dict[str, Any]]:

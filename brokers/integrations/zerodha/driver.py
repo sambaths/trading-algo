@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from typing import Any, Dict, List, Optional
 
 from ...core.enums import Exchange, OrderType, ProductType, TransactionType, Validity
@@ -236,12 +237,18 @@ class ZerodhaDriver(BrokerDriver):
             )
             resp = OrderResponse(status="ok", order_id=str(order_id), raw={"order_id": order_id})
             # Optional: immediately notify via callback that order placement succeeded
-            if getattr(self, "_on_order_update_cb", None):
-                try:
-                    self._on_order_update_cb(None, {"event": "order_update", "status": "ok", "order_id": str(order_id), "message": None, "raw": {"order_id": order_id}})
-                except Exception:
-                    pass
-            return resp
+            if isinstance(resp, dict) and resp.get("s") == "ok":
+                if getattr(self, "_on_order_update_cb", None):
+                    try:
+                        self._on_order_update_cb(None, {"event": "order_update", "status": "ok", "order_id": str(order_id), "message": None, "raw": {"order_id": order_id}})
+                    except Exception:
+                        pass
+                return resp
+            
+            if isinstance(resp, dict) and resp.get("s") == "error":
+                return OrderResponse(status="error", order_id=str(resp.get("id") or resp.get("order_id")), raw=resp if isinstance(resp, dict) else None)
+            
+            return OrderResponse(status="error", order_id=-1, message=str(resp), raw=resp if isinstance(resp, dict) else None)
         except Exception as e:  # noqa: BLE001
             # Emit synthetic order error update to mimic broker event stream for testing
             if getattr(self, "_on_order_update_cb", None):
@@ -379,6 +386,10 @@ class ZerodhaDriver(BrokerDriver):
         df['expiry'] = pd.to_datetime(df['expiry']).dt.date
         df['days_to_expiry'] = df['expiry'].apply(lambda x: np.busday_count(datetime.now().date(), x) + 1 if not pd.isna(x) else np.nan)
         self.master_contract_df = df
+        self.cache_file = ".cache/zerodha_master_contract.csv"
+        if not os.path.exists(os.path.dirname(self.cache_file)):
+            os.makedirs(os.path.dirname(self.cache_file))
+        df.to_csv(self.cache_file, index=False)
         return df
 
     def get_instruments(self) -> List[Instrument]:

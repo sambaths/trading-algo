@@ -40,7 +40,7 @@ class MappingRegistry:
             OrderType.STOP: 3,
             OrderType.STOP_LIMIT: 4,
         }
-        cls.product_type["fyers"] = {xw
+        cls.product_type["fyers"] = {
             ProductType.INTRADAY: "INTRADAY",
             ProductType.CNC: "CNC",
             ProductType.MARGIN: "MARGIN",
