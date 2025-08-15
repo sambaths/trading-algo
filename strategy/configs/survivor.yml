@@ -24,7 +24,8 @@ default:
   
   # Underlying index symbol for price tracking and trade triggers
   # This is the reference index whose price movements determine when to trade
-  index_symbol: "NSE:NIFTY 50"
+  # TODO: Make sure this is correct as per the broker format
+  index_symbol: NSE:NIFTY 50" # "NSE:NIFTY50-INDEX"
   
   # Option series identifier - must match current trading option series
   # Format: NIFTY + expiry date (e.g., NIFTY25807 for 25th Jan 2025, 07th strike series)
@@ -142,4 +143,7 @@ default:
   # NRML: Normal margin
   # MIS: Margin Intraday Square-off
   product_type: "NRML"
+
+  # Tag for the orders to track orders from this strategy
+  tag: "Survivor"
 
