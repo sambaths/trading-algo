@@ -1075,12 +1075,7 @@ PARAMETER GROUPS:
     # This token is used for websocket subscription to receive real-time price updates
     try:
         quote_data = broker.get_quote(config['index_symbol'])
-        if os.getenv("BROKER_NAME") == "zerodha":
-            instrument_token = quote_data.raw[config['index_symbol']]['instrument_token']
-        elif os.getenv("BROKER_NAME") == "fyers":
-            instrument_token = config['index_symbol'] # TODO: Make Sure config['index_symbol'] is correct as per fyers format if not working - Need to standardize the format
-        else:
-            raise ValueError(f"Broker {os.getenv('BROKER_NAME')} not supported")
+        instrument_token = config['index_symbol'] # TODO: Make Sure config['index_symbol'] is correct as per fyers format if not working - Need to standardize the format
         logger.info(f"✓ Index instrument token obtained: {instrument_token}")
     except Exception as e:
         logger.error(f"Failed to get instrument token for {config['index_symbol']}: {e}")
@@ -1100,8 +1095,11 @@ PARAMETER GROUPS:
     def on_ticks(ws, ticks):
         logger.debug("Received ticks: {}".format(ticks))
         # Send tick data to strategy processing queue
-        if "symbol" in ticks:
+        if isinstance(ticks, list):
             dispatcher.dispatch(ticks)
+        else:
+            if "symbol" in ticks:
+                dispatcher.dispatch(ticks)
 
     def on_connect(ws, response):
         logger.info("Websocket connected successfully: {}".format(response))
@@ -1137,7 +1135,6 @@ PARAMETER GROUPS:
     # ==========================================================================
     # SECTION 7: MAIN TRADING LOOP
     # ==========================================================================
-    
     try:
         while True:
             try:
@@ -1154,12 +1151,19 @@ PARAMETER GROUPS:
                 # STEP 3: Optional data simulation for testing
                 # You also need to move `tick_data = dispatcher._main_queue.get()` above 
                 # outside of the while loop for this to work
-                # if isinstance(symbol_data, dict) and 'last_price' in symbol_data:
-                #     original_price = symbol_data['last_price']
-                #     variation = random.uniform(-50, 50)  # ±50 point random variation
-                #     symbol_data['last_price'] += variation
-                #     logger.debug(f"Testing mode - Original: {original_price}, "
-                #                 f"Modified: {symbol_data['last_price']} (Δ{variation:+.1f})")
+                # if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data) :
+                #     if 'last_price' in symbol_data: 
+                #         original_price = symbol_data['last_price']
+                #         variation = random.uniform(-50, 50)  # ±50 point random variation
+                #         symbol_data['last_price'] += variation
+                #         logger.debug(f"Testing mode - Original: {original_price}, "
+                #                     f"Modified: {symbol_data['last_price']} (Δ{variation:+.1f})")
+                #     elif 'ltp' in symbol_data:
+                #         original_price = symbol_data['ltp']
+                #         variation = random.uniform(-50, 50)  # ±50 point random variation
+                #         symbol_data['ltp'] += variation
+                #         logger.debug(f"Testing mode - Original: {original_price}, "
+                #                     f"Modified: {symbol_data['ltp']} (Δ{variation:+.1f})")
                 
                 # STEP 4: Process tick through strategy
                 # This triggers the main strategy logic for PE/CE evaluation
