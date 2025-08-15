@@ -314,7 +314,7 @@ class WaveStrategy:
         """Get trading restrictions for the given symbol."""
         all_restrictions = self._get_dynamic_restrictions()
         
-        if symbol.startswith("NIFTY BANK"):
+        if "NIFTY" in symbol and "BANK" in symbol:
             return all_restrictions['bank_nifty'], False
         elif symbol.startswith("NIFTY"):
             return all_restrictions['nifty'], False
@@ -875,7 +875,9 @@ if __name__ == "__main__":
     # Load default configuration from YAML file
     config_file = os.path.join(os.path.dirname(__file__), "configs/wave.yml")
     with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)['default']
+        full_config = yaml.safe_load(f)
+        config = full_config['default']
+        symbol_configs = full_config.get('symbols', {})
 
     def create_argument_parser():
         """Create and configure argument parser with detailed help"""
@@ -887,7 +889,7 @@ if __name__ == "__main__":
     # Use default configuration from wave.yml
     python wave.py
     
-    # Override specific parameters
+    # Single symbol with parameter overrides
     python wave.py --symbol-name NIFTY25SEPFUT --buy-gap 25 --sell-gap 25
     
     # Full parameter override
@@ -901,7 +903,13 @@ if __name__ == "__main__":
 CONFIGURATION HIERARCHY:
 =======================
 1. Command line arguments (highest priority)
-2. wave.yml default values (fallback)
+2. Symbol-specific values from wave.yml symbols section
+3. wave.yml default values (fallback)
+
+MODE SELECTION:
+==============
+• Single Symbol Mode (default): If no entries in 'symbols' section
+• Multi-Symbol Mode (inferred): If one or more entries exist in 'symbols'
 
 PARAMETER GROUPS:
 ================
@@ -1249,9 +1257,17 @@ PARAMETER GROUPS:
         return True
     
     # Run configuration validation
-    if not validate_configuration(config):
-        logger.error("Configuration validation failed. Please update your configuration.")
-        sys.exit(1)
+    is_multi_symbol = len(symbol_configs) > 0
+    if is_multi_symbol:
+        # For multi-symbol mode, we don't need to validate individual symbol configurations
+        # as they will be validated when each strategy is initialized
+        logger.info("Multi-symbol mode inferred from config - skipping individual symbol validation")
+        logger.info(f"Will initialize strategies for {len(symbol_configs)} symbols")
+    else:
+        # Single symbol mode - use existing validation
+        if not validate_configuration(config):
+            logger.error("Configuration validation failed. Please update your configuration.")
+            sys.exit(1)
 
     # Log configuration source and overrides
     if overridden_params:
@@ -1262,14 +1278,25 @@ PARAMETER GROUPS:
         logger.info(f"Using default configuration from {config_file}")
 
     # Log key trading parameters for verification
-    logger.info(f"Trading Configuration:")
-    logger.info(f"  Symbol: {config['symbol_name']}, Exchange: {config['exchange']}")
-    logger.info(f"  Gaps - Buy: {config['buy_gap']}, Sell: {config['sell_gap']}")
-    logger.info(f"  Quantities - Buy: {config['buy_quantity']}, Sell: {config['sell_quantity']}")
-    logger.info(f"  Cool-off: {config['cool_off_time']}s")
-    logger.info(f"  Order Type: {config['order_type']}, Variety: {config['variety']}")
-    logger.info(f"  NIFTY Delta Limits: {config['min_nifty_delta']} to {config['max_nifty_delta']}")
-    logger.info(f"  BANKNIFTY Delta Limits: {config['min_bank_nifty_delta']} to {config['max_bank_nifty_delta']}")
+    if is_multi_symbol:
+        logger.info(f"Multi-Symbol Trading Configuration:")
+        logger.info(f"  Base Configuration - Exchange: {config['exchange']}")
+        logger.info(f"  Symbols to trade: {list(symbol_configs.keys())}")
+        logger.info(f"  Base Gaps - Buy: {config['buy_gap']}, Sell: {config['sell_gap']}")
+        logger.info(f"  Base Quantities - Buy: {config['buy_quantity']}, Sell: {config['sell_quantity']}")
+        logger.info(f"  Base Cool-off: {config['cool_off_time']}s")
+        logger.info(f"  Base Order Type: {config['order_type']}, Variety: {config['variety']}")
+        logger.info(f"  Base NIFTY Delta Limits: {config['min_nifty_delta']} to {config['max_nifty_delta']}")
+        logger.info(f"  Base BANKNIFTY Delta Limits: {config['min_bank_nifty_delta']} to {config['max_bank_nifty_delta']}")
+    else:
+        logger.info(f"Single Symbol Trading Configuration:")
+        logger.info(f"  Symbol: {config['symbol_name']}, Exchange: {config['exchange']}")
+        logger.info(f"  Gaps - Buy: {config['buy_gap']}, Sell: {config['sell_gap']}")
+        logger.info(f"  Quantities - Buy: {config['buy_quantity']}, Sell: {config['sell_quantity']}")
+        logger.info(f"  Cool-off: {config['cool_off_time']}s")
+        logger.info(f"  Order Type: {config['order_type']}, Variety: {config['variety']}")
+        logger.info(f"  NIFTY Delta Limits: {config['min_nifty_delta']} to {config['max_nifty_delta']}")
+        logger.info(f"  BANKNIFTY Delta Limits: {config['min_bank_nifty_delta']} to {config['max_bank_nifty_delta']}")
 
     # ==========================================================================
     # SECTION 4: TRADING INFRASTRUCTURE SETUP
@@ -1282,101 +1309,228 @@ PARAMETER GROUPS:
         logger.error("Broker not initialized. Please configure it properly.")
         sys.exit(1)
 
-    # Create order tracking system for position management
-    order_tracker = OrderTracker()
-
     # ==========================================================================
     # SECTION 5: STRATEGY INITIALIZATION AND EXECUTION
     # ==========================================================================
-    # Initialize trading system
-    trading_system = WaveStrategy(config, broker, order_tracker)
-
-    # Get instrument token for the underlying index
-    # This token is used for websocket subscription to receive real-time price updates
-    # try:
-    #     quote_data = broker.get_quote(config['index_symbol'])
-    #     instrument_token = quote_data[config['index_symbol']]['instrument_token']
-    #     logger.info(f"✓ Index instrument token obtained: {instrument_token}")
-    # except Exception as e:
-    #     logger.error(f"Failed to get instrument token for {config['index_symbol']}: {e}")
-    #     sys.exit(1)
-
-    # Initialize data dispatcher for handling real-time market data
-    # The dispatcher manages queues and routes market data to strategy
-    dispatcher = DataDispatcher()
-    dispatcher.register_main_queue(Queue())
-
-    order_dispatcher = DataDispatcher()
-    order_dispatcher.register_main_queue(Queue())
-
-    # ==========================================================================
-    # SECTION 5: WEBSOCKET CALLBACK CONFIGURATION  
-    # ==========================================================================
     
-    # Define websocket event handlers for real-time data processing
-    
-    def on_ticks(ws, ticks):
-        logger.debug("Received ticks: {}".format(ticks))
-        # Send tick data to strategy processing queue
-        if isinstance(ticks, list):
-            dispatcher.dispatch(ticks)
-        else:
-            if "symbol" in ticks:
-                dispatcher.dispatch(ticks)
-
-    def on_connect(ws, response):
-        logger.info("Websocket connected successfully: {}".format(response))
-
-    def on_order_update(ws, data):
-        # logger.info(f"Order Update Received: {data}")
-        trading_system.handle_order_update(data)
+    # Check if multi-symbol mode is enabled
+    if is_multi_symbol:
+        logger.info("="*80)
+        logger.info("Multi Symbols Identified in Configuration")
+        logger.info("="*80)
         
-    # # Assign callbacks to broker's websocket instance
-    # broker.on_ticks = on_ticks
-    # broker.on_connect = on_connect
-    # broker.on_order_update = on_order_update
-
-    # ==========================================================================
-    # SECTION 6: WEBSOCKET CONNECTION
-    # ==========================================================================
-    
-    # Connect to the websocket
-    # broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
-    broker.connect_order_websocket(on_order_update=on_order_update)
-    time.sleep(10) # Wait for 10 seconds to ensure the websocket is connected
+        if not symbol_configs:
+            logger.error("Multi-symbol mode inferred but no symbols defined in configuration file.")
+            logger.error("Please add symbols to the 'symbols' section in your wave.yml file.")
+            sys.exit(1)
         
-    # Place initial wave order
-    if not trading_system.check_is_any_order_active():
-         trading_system.place_wave_order()
-    
-    
-    # ==========================================================================
-    # SECTION 6: MAIN MONITORING LOOP
-    # ==========================================================================
-    try:
-        logger.info("--- Starting Main Monitoring Loop ---")
-        while True:
-            time.sleep(60)
-            logger.info("Waking up for periodic check...")
-            
-            trading_system.print_current_status()
-            
-            trading_system.check_and_enforce_restrictions_on_active_orders()
-
-            if not trading_system.check_is_any_order_active():
-                logger.info("No active orders found. Placing a new wave order.")
-                trading_system.place_wave_order()
-                logger.info("Continuing to monitor.")
+        logger.info(f"Found {len(symbol_configs)} symbols in configuration:")
+        for symbol_name in symbol_configs.keys():
+            logger.info(f"  • {symbol_name}")
+        
+        # Create separate configs for each symbol
+        symbol_strategies = {}
+        symbol_last_execution = {}
+        
+        for symbol_name, symbol_config in symbol_configs.items():
+            try:
+                # Create separate config for this symbol (like reading separate config files)
+                symbol_full_config = config.copy()
+                symbol_full_config.update(symbol_config)
+                symbol_full_config['symbol_name'] = symbol_name
                 
-    except KeyboardInterrupt:
-        # Handle graceful shutdown on Ctrl+C
-        logger.info("SHUTDOWN REQUESTED - Stopping strategy...")
-    except Exception as fatal_error:
-        # Handle fatal errors that require strategy shutdown
-        logger.error("FATAL ERROR in main trading loop:")
-        logger.error(f"Error: {fatal_error}")
-        traceback.print_exc()
-        sys.exit(1)
-    finally:
-        logger.info("STRATEGY SHUTDOWN COMPLETE")
+                # Create order tracker for this symbol
+                order_tracker = OrderTracker()
+                
+                # Create strategy instance
+                strategy = WaveStrategy(symbol_full_config, broker, order_tracker)
+                symbol_strategies[symbol_name] = strategy
+                symbol_last_execution[symbol_name] = 0  # Track last execution time
+                
+                logger.info(f"✓ Initialized strategy for {symbol_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize strategy for {symbol_name}: {e}")
+                continue
+        
+        if not symbol_strategies:
+            logger.error("No strategies could be initialized. Exiting.")
+            sys.exit(1)
+        
+        # Define order update handler for multi-symbol mode
+        def on_order_update(ws, data):
+            symbol = data.get('tradingsymbol', data.get('orders', {}).get('symbol', None))
+            print(f"Order Update Received: {symbol}")
+            if symbol and ":" in symbol:
+                symbol = symbol.split(":")[1]
+            
+            # If symbol is missing, skip routing
+            if not symbol:
+                return
+                
+            # Route to appropriate strategy
+            for symbol_name, strategy in symbol_strategies.items():
+                if symbol_name in symbol or symbol in symbol_name:
+                    strategy.handle_order_update(data)
+                    return
+        
+        # Connect to websocket
+        broker.connect_order_websocket(on_order_update=on_order_update)
+        time.sleep(10)  # Wait for websocket connection
+        
+        # Place initial orders for all strategies
+        for symbol_name, strategy in symbol_strategies.items():
+            try:
+                if not strategy.check_is_any_order_active():
+                    logger.info(f"Placing initial wave order for {symbol_name}")
+                    strategy.place_wave_order()
+                else:
+                    logger.info(f"Active orders already exist for {symbol_name}")
+            except Exception as e:
+                logger.error(f"Error placing initial order for {symbol_name}: {e}")
+        
+        # ==========================================================================
+        # MULTI-SYMBOL MAIN MONITORING LOOP
+        # ==========================================================================
+        try:
+            logger.info("--- Starting Wave Monitoring Loop ---")
+            while True:
+                current_time = time.time()
+                
+                # Check each symbol every 60 seconds
+                for symbol_name, strategy in symbol_strategies.items():
+                    try:
+                        # Check if it's time to execute this symbol (60 second intervals)
+                        if current_time - symbol_last_execution.get(symbol_name, 0) >= 60:
+                            logger.info(f"Processing {symbol_name}...")
+                            
+                            # Print status
+                            strategy.print_current_status()
+                            
+                            # Check and enforce restrictions
+                            strategy.check_and_enforce_restrictions_on_active_orders()
+                            
+                            # Place new orders if needed
+                            if not strategy.check_is_any_order_active():
+                                logger.info(f"No active orders for {symbol_name}. Placing new wave order.")
+                                strategy.place_wave_order()
+                            
+                            # Update last execution time
+                            symbol_last_execution[symbol_name] = current_time
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing {symbol_name}: {e}")
+                
+                # Sleep for a short interval before next check
+                time.sleep(5)
+                
+        except KeyboardInterrupt:
+            logger.info("SHUTDOWN REQUESTED - Stopping multi-symbol strategy...")
+        except Exception as fatal_error:
+            logger.error("FATAL ERROR in multi-symbol trading loop:")
+            logger.error(f"Error: {fatal_error}")
+            traceback.print_exc()
+            sys.exit(1)
+        finally:
+            logger.info("MULTI-SYMBOL STRATEGY SHUTDOWN COMPLETE")
+    
+    else:
+        logger.info("="*80)
+        logger.info("Single Symbol Trading Mode")
+        logger.info("="*80)
+        
+        # Create order tracking system for position management
+        order_tracker = OrderTracker()
+        
+        # Initialize trading system
+        trading_system = WaveStrategy(config, broker, order_tracker)
+
+        # Get instrument token for the underlying index
+        # This token is used for websocket subscription to receive real-time price updates
+        # try:
+        #     quote_data = broker.get_quote(config['index_symbol'])
+        #     instrument_token = quote_data[config['index_symbol']]['instrument_token']
+        #     logger.info(f"✓ Index instrument token obtained: {instrument_token}")
+        # except Exception as e:
+        #     logger.error(f"Failed to get instrument token for {config['index_symbol']}: {e}")
+        #     sys.exit(1)
+
+        # Initialize data dispatcher for handling real-time market data
+        # The dispatcher manages queues and routes market data to strategy
+        dispatcher = DataDispatcher()
+        dispatcher.register_main_queue(Queue())
+
+        order_dispatcher = DataDispatcher()
+        order_dispatcher.register_main_queue(Queue())
+
+        # ==========================================================================
+        # SECTION 5: WEBSOCKET CALLBACK CONFIGURATION  
+        # ==========================================================================
+        
+        # Define websocket event handlers for real-time data processing
+        
+        def on_ticks(ws, ticks):
+            logger.debug("Received ticks: {}".format(ticks))
+            # Send tick data to strategy processing queue
+            if isinstance(ticks, list):
+                dispatcher.dispatch(ticks)
+            else:
+                if "symbol" in ticks:
+                    dispatcher.dispatch(ticks)
+
+        def on_connect(ws, response):
+            logger.info("Websocket connected successfully: {}".format(response))
+
+        def on_order_update(ws, data):
+            # logger.info(f"Order Update Received: {data}")
+            trading_system.handle_order_update(data)
+            
+        # # Assign callbacks to broker's websocket instance
+        # broker.on_ticks = on_ticks
+        # broker.on_connect = on_connect
+        # broker.on_order_update = on_order_update
+
+        # ==========================================================================
+        # SECTION 6: WEBSOCKET CONNECTION
+        # ==========================================================================
+        
+        # Connect to the websocket
+        # broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
+        broker.connect_order_websocket(on_order_update=on_order_update)
+        time.sleep(10) # Wait for 10 seconds to ensure the websocket is connected
+            
+        # Place initial wave order
+        if not trading_system.check_is_any_order_active():
+            trading_system.place_wave_order()
+        
+        
+        # ==========================================================================
+        # SECTION 6: MAIN MONITORING LOOP
+        # ==========================================================================
+        try:
+            logger.info("--- Starting Main Monitoring Loop ---")
+            while True:
+                time.sleep(60)
+                logger.info("Waking up for periodic check...")
+                
+                trading_system.print_current_status()
+                
+                trading_system.check_and_enforce_restrictions_on_active_orders()
+
+                if not trading_system.check_is_any_order_active():
+                    logger.info("No active orders found. Placing a new wave order.")
+                    trading_system.place_wave_order()
+                    logger.info("Continuing to monitor.")
+                    
+        except KeyboardInterrupt:
+            # Handle graceful shutdown on Ctrl+C
+            logger.info("SHUTDOWN REQUESTED - Stopping strategy...")
+        except Exception as fatal_error:
+            # Handle fatal errors that require strategy shutdown
+            logger.error("FATAL ERROR in main trading loop:")
+            logger.error(f"Error: {fatal_error}")
+            traceback.print_exc()
+            sys.exit(1)
+        finally:
+            logger.info("STRATEGY SHUTDOWN COMPLETE")
 

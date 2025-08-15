@@ -1,7 +1,7 @@
 # Global Configuration - Default values for all symbols
 default:
   # Core Trading Parameters
-  symbol_name: "NIFTY25SEPFUT"
+  symbol_name: null # Leave this None for multi-symbol mode
   exchange: "NFO"
   
   # Gap Parameters
@@ -35,4 +35,29 @@ default:
 
   # Order Type
   order_type: "LIMIT"
-  variety: "REGULAR"
+  variety: "REGULAR" # Not Used
+
+
+# Symbol-specific configurations - only specify what differs from global
+symbols:
+  # NIFTY specific configuration - only overrides what's different
+  NIFTY25OCTFUT:
+    buy_gap: 30
+    sell_gap: 30
+    min_nifty_delta: -150
+    max_nifty_delta: 150
+  
+  # BANKNIFTY specific configuration - only overrides what's different
+  BANKNIFTY25SEPFUT:
+    buy_gap: 20
+    sell_gap: 20
+    buy_quantity: 35
+    sell_quantity: 35
+    lot_size: 35
+    min_bank_nifty_delta: -200
+    max_bank_nifty_delta: 200
+    todays_volatility: 25.0
+    margin_spread: 150.0
+    margin_single_pe_ce: 150.0
+    margin_both_pe_ce: 150.0
+  
