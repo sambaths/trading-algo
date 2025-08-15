@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime
 from logger import logger
@@ -16,7 +17,7 @@ class OrderTracker:
         self._all_orders = {}       
         self._order_ids_not_completed = []
         self._current_order = None  # Private attribute for the most recent order
-        self._load_orders()         # Load orders when the manager is initialized
+        # self._load_orders()         # Load orders when the manager is initialized
         self._order_ids_completed = []
         self._order_types_summary = {}
 
@@ -89,7 +90,7 @@ class OrderTracker:
             order_details (dict): A dictionary containing the details of the order.
                                   It MUST include a unique 'order_id'.
         """
-        order_id = order_details.get('order_id')
+        order_id = order_details.get('order_id', order_details.get('orders', {}).get('id', None))
         if not order_id:
             logger.error("Cannot place order: 'order_id' is missing from order_details.")
             return
@@ -100,17 +101,17 @@ class OrderTracker:
 
         # Update the current order
         self._current_order = order_details
-        logger.info(f"Order being placed: {self._current_order}")
+        logger.debug(f"Order being placed: {self._current_order}")
 
         # Add or update in the dictionary
         if order_id in self._all_orders:
             logger.warning(f"Order with ID '{order_id}' already exists. Updating existing order.")
         self._all_orders[order_id] = self._current_order
-        logger.info(f"Order '{order_id}' added/updated in in-memory dictionary.")
+        logger.debug(f"Order '{order_id}' added/updated in in-memory dictionary.")
 
         # Save all orders to disk after each placement
-        self._save_orders()
-        logger.info("Orders saved to disk.")
+        # self._save_orders()
+        # logger.info("Orders saved to disk.")
 
 
     @property
@@ -192,3 +193,65 @@ class OrderTracker:
         else:
             logger.error(f"Order '{order_id}' not found in the order tracker.")
             return False
+
+    def remove_order(self, order_id: str):
+        """
+        Removes an order from the order tracker.
+        """
+        if order_id in self._all_orders:
+            del self._all_orders[order_id]  
+            # self._save_orders()
+            logger.info(f"Order '{order_id}' removed from the order tracker.")
+            return True
+        else:
+            logger.error(f"Order '{order_id}' not found in the order tracker.")
+            return False
+
+    def _record_order_complete(self, order_id: str, transaction_type: str):
+        """
+        Records order completion statistics.
+        """
+        if order_id not in self._order_ids_completed:
+            if transaction_type not in self._order_types_summary:
+                self._order_types_summary[transaction_type] = 1
+            else:
+                self._order_types_summary[transaction_type] += 1
+
+    def get_order_summary(self):
+        """
+        Returns a summary of order statistics.
+        """
+        return {
+            'total_orders': len(self._all_orders),
+            'completed_orders': len(self._order_ids_completed),
+            'active_orders': len(self._all_orders) - len(self._order_ids_completed),
+            'order_types_summary': self._order_types_summary.copy(),
+            'current_order': self._current_order
+        }
+
+    def print_status(self, additional_info=None):
+        """
+        Prints current order status and statistics.
+        
+        Args:
+            additional_info (dict): Additional information to display
+        """
+        summary = self.get_order_summary()
+        
+        logger.info("="*50)
+        logger.info(f"ORDER STATUS - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("="*50)
+        logger.info(f"Total Orders: {summary['total_orders']}")
+        logger.info(f"Completed Orders: {summary['completed_orders']}")
+        logger.info(f"Active Orders: {summary['active_orders']}")
+        logger.info(f"Order Types Summary: {summary['order_types_summary']}")
+        
+        if self._all_orders:
+            logger.info(f"Current Orders: {self._all_orders}")
+            
+        if additional_info:
+            logger.info("Additional Info:")
+            for key, value in additional_info.items():
+                logger.info(f"  {key}: {value}")
+                
+        logger.info("="*50)
