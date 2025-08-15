@@ -21,9 +21,6 @@ from dotenv import load_dotenv
 load_dotenv()
 import mibian 
 
-from multiprocessing import Lock
-
-
 class WaveStrategy:
     """Main trading system that implements wave trading strategy"""
     
@@ -41,6 +38,7 @@ class WaveStrategy:
         self.tag = config.get("tag", "WAVE_SCRAPER")
         self.order_type = config.get("order_type", "LIMIT")
         self.variety = config.get("variety", "REGULAR")
+        self.lot_size = int(config.get("lot_size", None))
         
         # Order tracking
         self.order_tracker = order_tracker
@@ -84,8 +82,8 @@ class WaveStrategy:
         self.prev_wave_buy_price = None
         self.prev_quote_price = None
 
-        # oms lock
-        self.oms_lock = Lock()
+        self.handle_order_update_call_tracker = {}
+        self.handle_order_update_call_tracker_response_dict = {}
 
         
         logger.info(f"System initialized for {self.symbol_name}")
@@ -121,9 +119,9 @@ class WaveStrategy:
             positions = self.broker.get_positions()
             # net_positions = positions['net'] # TODO: Remove this if not required
             for position in positions:
-                logger.info(f"Symbol: {position.symbol}")
+                logger.debug(f"Symbol: {position.symbol}")
                 if position.symbol == self.symbol_name.split(':')[1]:
-                    logger.info(f"Current Position: {position.quantity_total}")
+                    logger.info(f"Symbol: {position.symbol} | Current Position: {position.quantity_total}")
                     return position.quantity_total
                 
             return 0
@@ -369,13 +367,16 @@ class WaveStrategy:
                 price=final_sell_price, tag=self.tag
             ) # TODO: Variety Supported is only Regular for now
             sell_order_resp = self.broker.place_order(req)
-            print("req -> ", req)
-            print("sell_order_resp -> ", sell_order_resp)
             sell_order_id = sell_order_resp.order_id
+            if sell_order_id not in self.orders:
+                self.handle_order_update_call_tracker[sell_order_id] = False
 
             if sell_order_id != -1:
                 logger.info(f"Placed SELL order {sell_order_id} for {self.sell_quantity} @ {final_sell_price}")
                 self.add_order_to_list(sell_order_id, final_sell_price, self.sell_quantity, "SELL", symbol, -1)
+                logger.info(f"handle_order_update_call_tracker: {self.handle_order_update_call_tracker}")
+                if not self.handle_order_update_call_tracker[sell_order_id]:
+                    self.handle_order_update(self.handle_order_update_call_tracker_response_dict[sell_order_id])
 
         # only when the sell order has been placed or sell order was restricred and buy order was not restricted
         if (restrict_sell_order == 1 or sell_order_id != -1) and restrict_buy_order == 0:
@@ -386,15 +387,24 @@ class WaveStrategy:
             ) # TODO: Variety Supported is only Regular for now
             buy_order_resp = self.broker.place_order(req)
             buy_order_id = buy_order_resp.order_id
+            self.handle_order_update_call_tracker[buy_order_id] = False
             if buy_order_id != -1:
                 logger.info(f"Placed BUY order {buy_order_id} for {self.buy_quantity} @ {final_buy_price}")
                 if sell_order_id != -1:
-                    self.add_order_to_list(sell_order_id, final_sell_price, self.sell_quantity, "SELL", symbol, buy_order_id)
+                    # Only if sell order is present in the orders list, then add buy order id as associated order id
+                    # if sell order is rejected or cancelled - this is not done
+                    if sell_order_id in self.orders:
+                        self.add_order_to_list(sell_order_id, final_sell_price, self.sell_quantity, "SELL", symbol, buy_order_id)
                 self.add_order_to_list(buy_order_id, final_buy_price, self.buy_quantity, "BUY", symbol, sell_order_id)
+                logger.info(f"handle_order_update_call_tracker: {self.handle_order_update_call_tracker}")
+                if not self.handle_order_update_call_tracker[buy_order_id]:
+                    self.handle_order_update(self.handle_order_update_call_tracker_response_dict[buy_order_id])
             else:
                 logger.warning(f"Buy order failed, cancelling associated sell order {sell_order_id}")
                 self.broker.cancel_order(order_id=sell_order_id)
-                del self.orders[sell_order_id]
+                self._remove_order(sell_order_id)
+                del self.handle_order_update_call_tracker[sell_order_id]
+                del self.handle_order_update_call_tracker_response_dict[sell_order_id]
 
     def add_order_to_list(self, order_id, price, quantity, transaction_type, symbol, associated_order_id):
         now = datetime.datetime.now()
@@ -446,8 +456,12 @@ class WaveStrategy:
             
             current_net = self._get_position_for_symbol()
             # If new current_diff_scale > 0 it is more BUY, If it is < 0 it is SELL which has happened.
-            current_diff_scale = (current_net - self.initial_positions['position']) / self.quantity if self.quantity != 0 else 0 # TODO: Check this with Vibhu - We are setting quantity to sell_quantity in initilise function
-            
+            # TODO - TO BE FIXED BASED on the number of buy order and sell orders
+            # if a buy happens, next buy should happen with a factor of 1.3 , 
+            # if a buy and sell happens, ntext ubuy or sell can happen with a factor of 1
+            # Quantity should be removed and not used
+            # current_diff_scale = (current_net - self.initial_positions['position']) / self.quantity if self.quantity != 0 else 0 # TODO: Check this with Vibhu - We are setting quantity to sell_quantity in initilise function
+            current_diff_scale = self.get_current_position_difference()
             symbol_type = self._get_symbol_type(symbol)
             
             if (symbol_type == "ce" or symbol_type == "pe") and current_net == 0:
@@ -555,8 +569,8 @@ class WaveStrategy:
                         if assoc_order_id and assoc_order_id in self.orders:
                             logger.warning(f"Cancelling associated order {assoc_order_id}.") # TODO: If this required ?
                             self.broker.cancel_order(order_id=assoc_order_id)
-                            del self.orders[assoc_order_id]
-                        del self.orders[order_id]
+                            self._remove_order(assoc_order_id)
+                        self._remove_order(order_id)
                         continue
                     except Exception as e:
                         logger.error(f"Failed to cancel order {order_id}: {e}")
@@ -583,11 +597,16 @@ class WaveStrategy:
                             price=final_sell_price, tag=self.tag
                         )
                         sell_order_id = sell_order_resp.order_id
+                        self.handle_order_update_call_tracker[sell_order_id] = False
                         if buy_order_present:
                             self.add_order_to_list(sell_order_id, final_sell_price, self.sell_quantity, "SELL", symbol, buy_order_id)
                             self.orders[buy_order_id]['associated_order'] = sell_order_id
+                            if not self.handle_order_update_call_tracker[sell_order_id]:
+                                self.handle_order_update(self.handle_order_update_call_tracker_response_dict[sell_order_id])
                         else:
                             self.add_order_to_list(sell_order_id, final_sell_price, self.sell_quantity, "SELL", symbol, -1)
+                            if not self.handle_order_update_call_tracker[sell_order_id]:
+                                self.handle_order_update(self.handle_order_update_call_tracker_response_dict[sell_order_id])
                 else:
                     logger.critical("No previous wave sell price found. This should not happen.")
 
@@ -603,11 +622,16 @@ class WaveStrategy:
                             price=final_buy_price, tag=self.tag
                         )
                         buy_order_id = buy_order_resp.order_id  
+                        self.handle_order_update_call_tracker[buy_order_id] = False
                         if sell_order_present:
                             self.add_order_to_list(buy_order_id, final_buy_price, self.buy_quantity, "BUY", symbol, sell_order_id)
                             self.orders[sell_order_id]['associated_order'] = buy_order_id
+                            if not self.handle_order_update_call_tracker[buy_order_id]:
+                                self.handle_order_update(self.handle_order_update_call_tracker_response_dict[buy_order_id])
                         else:
                             self.add_order_to_list(buy_order_id, final_buy_price, self.buy_quantity, "BUY", symbol, -1)
+                            if not self.handle_order_update_call_tracker[buy_order_id]:
+                                self.handle_order_update(self.handle_order_update_call_tracker_response_dict[buy_order_id])
                 else:
                     logger.critical("No previous wave buy price found. This should not happen.")
                 
@@ -644,6 +668,20 @@ class WaveStrategy:
                 logger.info(f"Tracked Orders: {self.orders}")
             logger.info("="*50)
 
+    def get_current_position_difference(self) -> float:
+        """
+        Returns the current position difference based on the self.orders
+        """
+        current_position_difference = 0
+        for order_id, order_info in self.orders.items():
+            if order_id == -1:
+                continue
+            if order_info['type'] == 'BUY':
+                current_position_difference += order_info['quantity']
+            elif order_info['type'] == 'SELL':
+                current_position_difference -= order_info['quantity']
+        return current_position_difference / self.lot_size
+    
     def _complete_order(self, order_id: str):
         """
         Completes an order.
@@ -693,58 +731,76 @@ class WaveStrategy:
             broker: Broker instance for order cancellation
             strategy_callback: Optional callback function for strategy-specific actions
         """
-        with self.oms_lock:
-            order_id = order_data.get('order_id', order_data.get('orders', {}).get('id', None))
-            if not order_id:
-                logger.warning("Order update received without order_id")
-                return
-                
-            logger.info(f"Order Update: {order_data}")
-            # print("self.orders -> ", self.orders)
-            if order_id not in self.orders:
-                logger.info(f"Order {order_id} not found in orders list")
-                time.sleep(1) # Waiting for the order to be tracked within the WaveStrategy class before handling the order update details
+        order_id = order_data.get('order_id', order_data.get('orders', {}).get('id', None))
+        symbol = order_data.get('tradingsymbol', order_data.get('orders', {}).get('symbol', None))
+        tag = order_data.get('orderTag', order_data.get('orders', {}).get('orderTag', order_data.get('tag', None)))
+        status = order_data.get('status', order_data.get('orders', {}).get('status', 'N/A'))
 
-            if order_id in self.orders:
-                order_info = self.orders[order_id]
-                status = order_data.get('status', order_data.get('orders', {}).get('status', 'N/A'))
-                
-                if status == 'COMPLETE' or status == 2: # TODO: Check this - this is for fyers and zerodha
-                    logger.info(f"Order {order_id} executed successfully")
-                    self._complete_order(order_id)
-                    self.order_tracker.record_order_complete(order_id, order_info['transaction_type'])
-                    
-                        
-                elif status == 'CANCELLED' or status == 1:
-                    logger.info(f"Order {order_id} was cancelled")
-                    self._remove_order(order_id)
+        if ":" in symbol:
+            symbol = symbol.split(":")[1]
+        if symbol not in self.symbol_name:
+            logger.info(f"Order update received for symbol {symbol} but current symbol is {self.symbol_name.split(':')[1]}")
+            return
 
-                elif status == 'OPEN' or status == 6:
-                    # Update order details
-                    if 'price' in order_data:
-                        self.orders[order_id]['price'] = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
-                    if 'quantity' in order_data:
-                        self.orders[order_id]['quantity'] = order_data.get('quantity', order_data.get('orders', {}).get('qty', 'N/A'))
-                    logger.info(f"Order {order_id} updated: {self.orders[order_id]}")
-                elif status == 'REJECTED' or status == 5:
-                    logger.warning(f"Order {order_id} was rejected, Reason - {order_data.get('status_message', order_data.get('orders', {}).get('message', 'N/A'))}")
-                    self._remove_order(order_id)
-                    
-                else:
-                    logger.info(f"Order {order_id} status: {status} | NOT HANDLED")
-                side = order_data.get('transaction_type', order_data.get('orders', {}).get('side', 'N/A'))
-                if side == 'BUY':
-                    self.prev_wave_buy_price = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
-                    logger.info(f"Updated Previous Wave Buy Price: {self.prev_wave_buy_price}")
+        if tag and self.tag not in tag:
+            logger.info(f"Order update received for tag {tag} but current tag is {self.tag}")
+            return
+
+        if not order_id:
+            logger.warning("Order update received without order_id")
+            return
             
-                if side == 'SELL':
-                    self.prev_wave_sell_price = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
-                    logger.info(f"Updated Previous Wave Sell Price: {self.prev_wave_sell_price}")
-                    
-            else:
-                logger.warning(f"Unknown order update: {order_data.get('transaction_type', order_data.get('orders', {}).get('side', 'N/A'))} -- "
-                            f"{order_data.get('tradingsymbol', order_data.get('orders', {}).get('symbol', 'N/A'))} -- {order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))}")
+        logger.info(f"Order Update: {order_data}")
+        # print("self.orders -> ", self.orders)
+        if order_id not in self.orders:
+            logger.info(f"Order {order_id} not found in orders list")
+            # Saving this for calling later
+            # if order_id not in self.handle_order_update_call_tracker:
+            self.handle_order_update_call_tracker[order_id] = False
+            self.handle_order_update_call_tracker_response_dict[order_id] = order_data
+            logger.info(f"Saved most recent order update for order {order_id} for later call")
+
+        if order_id in self.orders:
+            self.handle_order_update_call_tracker[order_id] = True
+            order_info = self.orders[order_id]
+            status = order_data.get('status', order_data.get('orders', {}).get('status', 'N/A'))
+            
+            if status == 'COMPLETE' or status == 2: # TODO: Check this - this is for fyers and zerodha
+                logger.info(f"Order {order_id} executed successfully")
+                self._complete_order(order_id)
+                self.order_tracker.record_order_complete(order_id, order_info['transaction_type'])
                 
+                    
+            elif status == 'CANCELLED' or status == 1:
+                logger.info(f"Order {order_id} was cancelled")
+                self._remove_order(order_id)
+
+            elif status == 'OPEN' or status == 6:
+                # Update order details
+                if 'price' in order_data:
+                    self.orders[order_id]['price'] = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
+                if 'quantity' in order_data:
+                    self.orders[order_id]['quantity'] = order_data.get('quantity', order_data.get('orders', {}).get('qty', 'N/A'))
+                logger.info(f"Order {order_id} updated: {self.orders[order_id]}")
+            elif status == 'REJECTED' or status == 5:
+                logger.warning(f"Order {order_id} was rejected, Reason - {order_data.get('status_message', order_data.get('orders', {}).get('message', 'N/A'))}")
+                self._remove_order(order_id)
+                
+            else:
+                logger.info(f"Order {order_id} status: {status} | NOT HANDLED")
+            side = order_data.get('transaction_type', order_data.get('orders', {}).get('side', 'N/A'))
+            if side == 'BUY':
+                self.prev_wave_buy_price = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
+                logger.info(f"Updated Previous Wave Buy Price: {self.prev_wave_buy_price}")
+        
+            if side == 'SELL':
+                self.prev_wave_sell_price = order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))
+                logger.info(f"Updated Previous Wave Sell Price: {self.prev_wave_sell_price}")
+                
+        else:
+            logger.warning(f"Unknown order update: {order_data.get('transaction_type', order_data.get('orders', {}).get('side', 'N/A'))} -- "
+                        f"{order_data.get('tradingsymbol', order_data.get('orders', {}).get('symbol', 'N/A'))} -- {order_data.get('price', order_data.get('orders', {}).get('limitPrice', 'N/A'))}")
+            
 
 
 # Below Logic is for
@@ -1232,7 +1288,6 @@ PARAMETER GROUPS:
     # ==========================================================================
     # SECTION 5: STRATEGY INITIALIZATION AND EXECUTION
     # ==========================================================================
-    
     # Initialize trading system
     trading_system = WaveStrategy(config, broker, order_tracker)
 
@@ -1251,6 +1306,9 @@ PARAMETER GROUPS:
     dispatcher = DataDispatcher()
     dispatcher.register_main_queue(Queue())
 
+    order_dispatcher = DataDispatcher()
+    order_dispatcher.register_main_queue(Queue())
+
     # ==========================================================================
     # SECTION 5: WEBSOCKET CALLBACK CONFIGURATION  
     # ==========================================================================
@@ -1260,23 +1318,16 @@ PARAMETER GROUPS:
     def on_ticks(ws, ticks):
         logger.debug("Received ticks: {}".format(ticks))
         # Send tick data to strategy processing queue
-        dispatcher.dispatch(ticks)
+        if isinstance(ticks, list):
+            dispatcher.dispatch(ticks)
+        else:
+            if "symbol" in ticks:
+                dispatcher.dispatch(ticks)
 
     def on_connect(ws, response):
         logger.info("Websocket connected successfully: {}".format(response))
-        
-        # Subscribe to the underlying index instrument
-        # ws.subscribe([instrument_token])
-        # logger.info(f"✓ Subscribed to instrument token: {instrument_token}")
-        
-        # Set full mode to receive complete market data (LTP, volume, OI, etc.)
-        # ws.set_mode(ws.MODE_FULL, [instrument_token])
-        
-        # Use Order Tracker to get the orders when we reconnect
 
     def on_order_update(ws, data):
-        # Use the OrderTracker and callbacks to handle order updates
-        time.sleep(3) # Waiting sometime for the order details to be tracked within the WaveStrategy class before handling the order update details
         # logger.info(f"Order Update Received: {data}")
         trading_system.handle_order_update(data)
         
@@ -1290,7 +1341,7 @@ PARAMETER GROUPS:
     # ==========================================================================
     
     # Connect to the websocket
-    broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
+    # broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
     broker.connect_order_websocket(on_order_update=on_order_update)
     time.sleep(10) # Wait for 10 seconds to ensure the websocket is connected
         
@@ -1302,11 +1353,10 @@ PARAMETER GROUPS:
     # ==========================================================================
     # SECTION 6: MAIN MONITORING LOOP
     # ==========================================================================
-    
     try:
         logger.info("--- Starting Main Monitoring Loop ---")
         while True:
-            time.sleep(5)
+            time.sleep(60)
             logger.info("Waking up for periodic check...")
             
             trading_system.print_current_status()
@@ -1316,8 +1366,7 @@ PARAMETER GROUPS:
             if not trading_system.check_is_any_order_active():
                 logger.info("No active orders found. Placing a new wave order.")
                 trading_system.place_wave_order()
-            else:
-                logger.info("Active orders present. Continuing to monitor.")
+                logger.info("Continuing to monitor.")
                 
     except KeyboardInterrupt:
         # Handle graceful shutdown on Ctrl+C
