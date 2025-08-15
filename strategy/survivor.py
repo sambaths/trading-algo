@@ -4,6 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
 from logger import logger
+from brokers import BrokerGateway, OrderRequest, Exchange, OrderType, TransactionType, ProductType
 
 class SurvivorStrategy:
     """
@@ -76,16 +77,18 @@ class SurvivorStrategy:
     PS: This will only work with Zerodha broker out of the box. For Fyers, there needs to be some straight forward changes to get quotes, place orders etc.
     """
     
-    def __init__(self, broker, config, order_manager):
+    def __init__(self, broker, config, order_tracker):
         # Assign config values as instance variables with 'strat_var_' prefix
         for k, v in config.items():
             setattr(self, f'strat_var_{k}', v)
         # External dependencies
         self.broker = broker
         self.symbol_initials = self.strat_var_symbol_initials
-        self.order_manager = order_manager  # Store OrderTracker
+        self.order_tracker = order_tracker  # Store OrderTracker
         self.broker.download_instruments()
-        self.instruments = self.broker.instruments_df[self.broker.instruments_df['tradingsymbol'].str.startswith(self.symbol_initials)]   # For Zerodha
+        self.instruments = self.broker.get_instruments()
+        self.instruments = self.instruments[self.instruments['symbol'].str.contains(self.symbol_initials)]
+
         if self.instruments.shape[0] == 0:
             logger.error(f"No instruments found for {self.symbol_initials}")
             logger.error(f"Instument {self.symbol_initials} not found. Please check the symbol initials")
@@ -93,13 +96,14 @@ class SurvivorStrategy:
         
         self.strike_difference = None      
         self._initialize_state()
+        self.lot_size = self.instruments['lot_size'].iloc[0]
         
         # Calculate and store strike difference for the option series
         self.strike_difference = self._get_strike_difference(self.symbol_initials)
         logger.info(f"Strike difference for {self.symbol_initials} is {self.strike_difference}")
 
     def _nifty_quote(self):
-        symbol_code = "NSE:NIFTY 50"
+        symbol_code = self.strat_var_index_symbol
         return self.broker.get_quote(symbol_code)
 
     def _initialize_state(self):
@@ -110,12 +114,11 @@ class SurvivorStrategy:
         
         # Get current market data for initialization
         current_quote = self._nifty_quote()
-        print(current_quote)  # Debug output
         
         # Initialize PE reference value
         if self.strat_var_pe_start_point == 0:
             # Use current market price as starting reference
-            self.nifty_pe_last_value = current_quote[self.strat_var_index_symbol]['last_price']
+            self.nifty_pe_last_value = current_quote.last_price
             logger.debug(f"Nifty PE Start Point is 0, so using LTP: {self.nifty_pe_last_value}")
         else:
             # Use configured starting point
@@ -124,7 +127,7 @@ class SurvivorStrategy:
         # Initialize CE reference value
         if self.strat_var_ce_start_point == 0:
             # Use current market price as starting reference
-            self.nifty_ce_last_value = current_quote[self.strat_var_index_symbol]['last_price']
+            self.nifty_ce_last_value = current_quote.last_price
             logger.debug(f"Nifty CE Start Point is 0, so using LTP: {self.nifty_ce_last_value}")
         else:
             # Use configured starting point
@@ -139,8 +142,8 @@ class SurvivorStrategy:
             
         # Filter for CE instruments to calculate strike difference 
         ce_instruments = self.instruments[
-            self.instruments['tradingsymbol'].str.startswith(symbol_initials) & 
-            self.instruments['tradingsymbol'].str.endswith('CE')
+            self.instruments['symbol'].str.contains(symbol_initials) & 
+            self.instruments['symbol'].str.endswith('CE')
         ]
         
         if ce_instruments.shape[0] < 2:
@@ -169,7 +172,7 @@ class SurvivorStrategy:
         
         Called externally by the main trading loop when new market data arrives
         """
-        current_price = ticks['last_price']
+        current_price = ticks['last_price'] if 'last_price' in ticks else ticks['ltp']
         
         # Process trading opportunities for both sides
         self._handle_pe_trade(current_price)  # Handle Put option opportunities
@@ -253,19 +256,22 @@ class SurvivorStrategy:
                     return 
                 
                 # Get current quote for the selected instrument
-                symbol_code = self.strat_var_exchange + ":" + instrument['tradingsymbol']
-                quote = self.broker.get_quote(symbol_code)[symbol_code]
+                if ":" not in instrument['symbol']:
+                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
+                else:
+                    symbol_code = instrument['symbol']
+                quote = self.broker.get_quote(symbol_code)
                 
                 # Check if premium meets minimum threshold
-                if quote['last_price'] < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote['last_price']} is less than min price to sell {self.strat_var_min_price_to_sell}")
+                if quote.last_price < self.strat_var_min_price_to_sell:
+                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}")
                     # Try closer strike if premium is too low
-                    temp_gap -= self.strat_var_nifty_lot_size
+                    temp_gap -= self.lot_size
                     continue
                     
                 # Execute the trade
-                logger.info(f"Execute PE sell @ {instrument['tradingsymbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['tradingsymbol'], total_quantity)
+                logger.info(f"Execute PE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
+                self._place_order(instrument['symbol'], total_quantity)
                 
                 # Set reset flag to enable reset logic
                 self.pe_reset_gap_flag = 1
@@ -327,20 +333,21 @@ class SurvivorStrategy:
                     return
                     
                 # Get current quote for the selected instrument
-                symbol_code = self.strat_var_exchange + ":" + instrument['tradingsymbol']
-                quote = self.broker.get_quote(symbol_code)[symbol_code]
-                print("=======", quote)
-                
+                if ":" not in instrument['symbol']:
+                    symbol_code = self.strat_var_exchange + ":" + instrument['symbol']
+                else:
+                    symbol_code = instrument['symbol']
+                quote = self.broker.get_quote(symbol_code)
                 # Check if premium meets minimum threshold
-                if quote['last_price'] < self.strat_var_min_price_to_sell:
-                    logger.info(f"Last price {quote['last_price']} is less than min price to sell {self.strat_var_min_price_to_sell}, trying next strike")
+                if quote.last_price < self.strat_var_min_price_to_sell:
+                    logger.info(f"Last price {quote.last_price} is less than min price to sell {self.strat_var_min_price_to_sell}, trying next strike")
                     # Try closer strike if premium is too low
-                    temp_gap -= self.strat_var_nifty_lot_size
+                    temp_gap -= self.lot_size
                     continue
                     
                 # Execute the trade
-                logger.info(f"Execute CE sell @ {instrument['tradingsymbol']} × {total_quantity}, Market Price")
-                self._place_order(instrument['tradingsymbol'], total_quantity)
+                logger.info(f"Execute CE sell @ {instrument['symbol']} × {total_quantity}, Market Price")
+                self._place_order(instrument['symbol'], total_quantity)
                 
                 # Set reset flag to enable reset logic
                 self.ce_reset_gap_flag = 1
@@ -392,7 +399,7 @@ class SurvivorStrategy:
             gap (int): Distance from current price to target strike
             
         Returns:
-            dict: Instrument details including tradingsymbol, strike, etc., or None if not found
+            dict: Instrument details including symbol, strike, etc., or None if not found
             
         Strike Selection Logic:
         1. For PE: target_strike = ltp - gap (out-of-the-money puts)
@@ -422,7 +429,7 @@ class SurvivorStrategy:
         
         # Filter instruments for matching criteria
         df = self.instruments[
-            (self.instruments['tradingsymbol'].str.startswith(self.strat_var_symbol_initials)) &
+            (self.instruments['symbol'].str.contains(self.strat_var_symbol_initials)) &
             (self.instruments['instrument_type'] == option_type) &
             (self.instruments['segment'] == "NFO-OPT")
         ]
@@ -469,23 +476,23 @@ class SurvivorStrategy:
         
         while True:
             # Get current market price
-            ltp = self._nifty_quote()['last_price']
+            ltp = self._nifty_quote().last_price
             
             # Find instrument at current gap
             instrument = self._find_nifty_symbol_from_gap(
-                self.instruments, self.strat_var_symbol_initials, temp_gap, option_type, ltp, self.strat_var_nifty_lot_size
+                self.instruments, self.strat_var_symbol_initials, temp_gap, option_type, ltp, self.lot_size
             )
             
             if instrument is None:
                 return None
                 
             # Check if premium meets minimum threshold
-            symbol_code = f"{self.strat_var_exchange}:{instrument['tradingsymbol']}"
-            price = float(self.kite.quote(symbol_code)[symbol_code]['last_price'])
+            symbol_code = f"{self.strat_var_exchange}:{instrument['symbol']}"
+            price = float(self.broker.get_quote(symbol_code).last_price)
             
             if price < self.strat_var_min_price_to_sell:
                 # Try closer strike if premium too low
-                temp_gap -= self.strat_var_nifty_lot_size
+                temp_gap -= self.lot_size
             else:
                 return instrument
 
@@ -512,20 +519,21 @@ class SurvivorStrategy:
         - Tag: "Survivor" for identification
         """
         # Place order through broker interface
-        order_id = self.broker.place_order(
-            symbol, 
-            quantity, 
-            price=None,  # Market order
-            transaction_type=self.strat_var_trans_type, 
-            order_type=self.strat_var_order_type, 
-            variety="REGULAR", 
-            exchange=self.strat_var_exchange, 
-            product=self.strat_var_product_type, 
-            tag="Survivor"
-        )
-        
+        if self.strat_var_exchange == "NFO":
+            exchange = Exchange.NFO
+
+        req = OrderRequest(
+                symbol=symbol, exchange=exchange, transaction_type=TransactionType.SELL,
+                quantity=quantity, product_type=ProductType.MARGIN, order_type=OrderType.MARKET,
+                price=None, tag=self.strat_var_tag
+            )
+        order_resp = self.broker.place_order(req)
+        order_status = order_resp.status
+        logger.debug(f"Order placement response: {order_resp}")
+        order_id = order_resp.order_id
+
         # Handle order placement failure
-        if order_id == -1:
+        if order_id == -1 or order_status == "error":
             logger.error(f"Order placement failed for {symbol} × {quantity}, Market Price")
             return
             
@@ -543,7 +551,10 @@ class SurvivorStrategy:
         }
         
         # Add to order tracking system
-        self.order_manager.add_order(order_details)
+        # self.order_tracker.add_order(order_details)
+        
+        # Log order placement for strategy tracking
+        logger.info(f"Survivor order tracked: {order_id} - {self.strat_var_trans_type} {symbol} × {quantity}")
         
 
     def _log_stable_market(self, current_val):
@@ -616,7 +627,7 @@ if __name__ == "__main__":
     from dispatcher import DataDispatcher
     from orders import OrderTracker
     from strategy.survivor import SurvivorStrategy
-    from brokers.zerodha import ZerodhaBroker
+    # from brokers.zerodha import ZerodhaBroker
     from logger import logger
     from queue import Queue
     import random
@@ -1050,13 +1061,13 @@ PARAMETER GROUPS:
     
     
     # Create broker interface for market data and order execution
-    if os.getenv("BROKER_TOTP_ENABLE") == "true":
-        logger.info("Using TOTP login flow")
-        broker = ZerodhaBroker(without_totp=False)
-    else:
-        logger.info("Using normal login flow")
-        broker = ZerodhaBroker(without_totp=True)
-    
+    # if os.getenv("BROKER_TOTP_ENABLE") == "true":
+    #     logger.info("Using TOTP login flow")
+    #     broker = ZerodhaBroker(without_totp=False)
+    # else:
+    #     logger.info("Using normal login flow")
+    #     broker = ZerodhaBroker(without_totp=True)
+    broker = BrokerGateway.from_name(os.getenv("BROKER_NAME"))
     # Create order tracking system for position management
     order_tracker = OrderTracker() 
     
@@ -1064,7 +1075,12 @@ PARAMETER GROUPS:
     # This token is used for websocket subscription to receive real-time price updates
     try:
         quote_data = broker.get_quote(config['index_symbol'])
-        instrument_token = quote_data[config['index_symbol']]['instrument_token']
+        if os.getenv("BROKER_NAME") == "zerodha":
+            instrument_token = quote_data.raw[config['index_symbol']]['instrument_token']
+        elif os.getenv("BROKER_NAME") == "fyers":
+            instrument_token = config['index_symbol'] # TODO: Make Sure config['index_symbol'] is correct as per fyers format if not working - Need to standardize the format
+        else:
+            raise ValueError(f"Broker {os.getenv('BROKER_NAME')} not supported")
         logger.info(f"✓ Index instrument token obtained: {instrument_token}")
     except Exception as e:
         logger.error(f"Failed to get instrument token for {config['index_symbol']}: {e}")
@@ -1084,22 +1100,22 @@ PARAMETER GROUPS:
     def on_ticks(ws, ticks):
         logger.debug("Received ticks: {}".format(ticks))
         # Send tick data to strategy processing queue
-        dispatcher.dispatch(ticks)
+        if "symbol" in ticks:
+            dispatcher.dispatch(ticks)
 
     def on_connect(ws, response):
         logger.info("Websocket connected successfully: {}".format(response))
         
-        # Subscribe to the underlying index instrument
-        ws.subscribe([instrument_token])
-        logger.info(f"✓ Subscribed to instrument token: {instrument_token}")
+        # # Subscribe to the underlying index instrument
+        # ws.subscribe([instrument_token])
+        # logger.info(f"✓ Subscribed to instrument token: {instrument_token}")
         
-        # Set full mode to receive complete market data (LTP, volume, OI, etc.)
-        ws.set_mode(ws.MODE_FULL, [instrument_token])
+        # # Set full mode to receive complete market data (LTP, volume, OI, etc.)
+        # ws.set_mode(ws.MODE_FULL, [instrument_token])
 
     def on_order_update(ws, data):
-        logger.info("Order update received: {}".format(data))
+        logger.info(f"Order update received: {data}")
         
-
     # Assign callbacks to broker's websocket instance
     broker.on_ticks = on_ticks
     broker.on_connect = on_connect
@@ -1110,7 +1126,10 @@ PARAMETER GROUPS:
     # ==========================================================================
     
     # Start websocket connection for real-time data
-    broker.connect_websocket()
+    broker.connect_websocket(on_ticks=on_ticks, on_connect=on_connect)
+    broker.symbols_to_subscribe([instrument_token])
+    broker.connect_order_websocket(on_order_update=on_order_update)
+    time.sleep(10)
 
     # Initialize the trading strategy with all dependencies
     strategy = SurvivorStrategy(broker, config, order_tracker)
@@ -1128,8 +1147,10 @@ PARAMETER GROUPS:
                 
                 # STEP 2: Extract the primary instrument data
                 # tick_data is a list, we process the first instrument
-                symbol_data = tick_data[0]
-                
+                if isinstance(tick_data, list):
+                    symbol_data = tick_data[0]
+                else:
+                    symbol_data = tick_data
                 # STEP 3: Optional data simulation for testing
                 # You also need to move `tick_data = dispatcher._main_queue.get()` above 
                 # outside of the while loop for this to work
@@ -1142,7 +1163,8 @@ PARAMETER GROUPS:
                 
                 # STEP 4: Process tick through strategy
                 # This triggers the main strategy logic for PE/CE evaluation
-                strategy.on_ticks_update(symbol_data)
+                if isinstance(symbol_data, dict) and ('last_price' in symbol_data or 'ltp' in symbol_data):
+                    strategy.on_ticks_update(symbol_data)
                 
             except KeyboardInterrupt:
                 # Handle graceful shutdown on Ctrl+C
@@ -1151,7 +1173,7 @@ PARAMETER GROUPS:
                 
             except Exception as tick_error:
                 # Handle individual tick processing errors
-                logger.error(f"Error processing tick data: {tick_error}")
+                logger.error(f"Error processing tick data: {tick_error}", exc_info=True)
                 logger.error("Continuing with next tick...")
                 # Continue the loop - don't stop for individual tick errors
                 continue
