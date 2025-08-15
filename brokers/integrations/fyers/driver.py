@@ -307,7 +307,6 @@ class FyersDriver(BrokerDriver):
                 "orderTag": request.tag,
             }
             payload.update(request.extras or {})
-            print(payload)
             resp = self._fyers_model.place_order(payload)
             if isinstance(resp, dict) and resp.get("s") == "ok":
                 result = OrderResponse(status="ok", order_id=str(resp.get("id") or resp.get("order_id")), raw=resp)
