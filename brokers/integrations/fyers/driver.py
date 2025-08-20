@@ -421,7 +421,7 @@ class FyersDriver(BrokerDriver):
             return out
         return out
 
-    def get_history(self, symbol: str, interval: str, start: str, end: str) -> List[Dict[str, Any]]:
+    def get_history(self, symbol: str, interval: str, start: str, end: str, oi: bool = False) -> List[Dict[str, Any]]:
         if not self._fyers_model:
             return []
         interval_map = {
@@ -451,6 +451,7 @@ class FyersDriver(BrokerDriver):
                 "range_from": start,
                 "range_to": end,
                 "cont_flag": "1",
+                "oi_flag": "1" if oi else "0",
             }
             resp = self._fyers_model.history(payload)
             if not (isinstance(resp, dict) and resp.get("s") == "ok"):
@@ -471,6 +472,7 @@ class FyersDriver(BrokerDriver):
                 l = float(c[3])
                 cl = float(c[4])
                 vol = int(c[5]) if len(c) > 5 and c[5] is not None else None
+                oi = int(c[6]) if len(c) > 6 and c[6] is not None else None
                 out.append({
                     "ts": ts,
                     "open": o,
@@ -478,6 +480,7 @@ class FyersDriver(BrokerDriver):
                     "low": l,
                     "close": cl,
                     "volume": vol,
+                    "oi": oi,
                 })
             return out
         except Exception as E:

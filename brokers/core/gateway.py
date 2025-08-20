@@ -106,7 +106,7 @@ class BrokerGateway:
         broker_symbols = [symbol_registry.to_broker_symbol(self.broker_name, s) for s in internal_symbols]
         return self.driver.get_quotes(broker_symbols)
 
-    def get_history(self, symbol: str, interval: str, start: str, end: str) -> List[Dict[str, Any]]:
+    def get_history(self, symbol: str, interval: str, start: str, end: str, oi: bool = False) -> List[Dict[str, Any]]:
         """
         Retrieve historical data with automatic chunking to handle API limitations.
         
@@ -115,6 +115,7 @@ class BrokerGateway:
             interval (str): Timeframe interval (e.g., "1m", "5m", "1d")
             start (str): Start date in format YYYY-MM-DD
             end (str): End date in format YYYY-MM-DD
+            oi (bool): Whether to include open interest data
             
         Returns:
             List[Dict[str, Any]]: Combined historical data from all chunks
@@ -151,7 +152,7 @@ class BrokerGateway:
             chunk_end = current_end.strftime("%Y-%m-%d")
             
             # Get data for this chunk
-            chunk_data = self.driver.get_history(broker_symbol, interval, chunk_start, chunk_end)
+            chunk_data = self.driver.get_history(broker_symbol, interval, chunk_start, chunk_end, oi)
             
             # Extend results with chunk data
             if chunk_data:

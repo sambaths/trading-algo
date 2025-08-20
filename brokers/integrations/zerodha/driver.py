@@ -302,7 +302,7 @@ class ZerodhaDriver(BrokerDriver):
         exch, tradingsymbol = symbol.split(":", 1)
         return Quote(symbol=tradingsymbol, exchange=Exchange[exch], last_price=last_price, raw=data)
 
-    def get_history(self, symbol: str, interval: str, start: str, end: str) -> List[Dict[str, Any]]:
+    def get_history(self, symbol: str, interval: str, start: str, end: str, oi: bool = False) -> List[Dict[str, Any]]:
         if not self._kite:
             return []
         exch, tradingsymbol = symbol.split(":", 1)
@@ -327,8 +327,10 @@ class ZerodhaDriver(BrokerDriver):
                 instruments = self._kite.instruments(exch)
             except Exception:
                 instruments = self._kite.instruments()
+            
             token = None
             for inst in instruments:
+                
                 if inst.get("exchange") == exch and inst.get("tradingsymbol") == tradingsymbol:
                     token = inst.get("instrument_token")
                     break
@@ -339,7 +341,7 @@ class ZerodhaDriver(BrokerDriver):
                         break
             if token is None:
                 return []
-            data = self._kite.historical_data(token, from_date=start, to_date=end, interval=interval_kite)
+            data = self._kite.historical_data(token, from_date=start, to_date=end, interval=interval_kite, oi=oi)
             # Normalize to [{ts, open, high, low, close, volume}]
             out: List[Dict[str, Any]] = []
             for c in data or []:
@@ -358,6 +360,7 @@ class ZerodhaDriver(BrokerDriver):
                     "low": float(c.get("low", 0.0)),
                     "close": float(c.get("close", 0.0)),
                     "volume": int(c.get("volume", 0)) if c.get("volume") is not None else None,
+                    "oi": int(c.get("oi", 0)) if c.get("oi") is not None else None,
                 })
             return out
         except Exception:
