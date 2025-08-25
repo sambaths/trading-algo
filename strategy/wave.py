@@ -563,13 +563,16 @@ class WaveStrategy:
                 if should_cancel:
                     logger.warning(f"Restriction violation! Cancelling {order_info['type']} order {order_id}.")
                     try:
-                        self.broker.cancel_order(order_id=order_id)
-                        # Also cancel the associated order
+                        # self.broker.cancel_order(order_id=order_id)
+                        # Also cancel the associated order - Not Needed
                         assoc_order_id = order_info.get('associated_order')
                         if assoc_order_id and assoc_order_id in self.orders:
-                            logger.warning(f"Cancelling associated order {assoc_order_id}.") # TODO: If this required ?
-                            self.broker.cancel_order(order_id=assoc_order_id)
-                            self._remove_order(assoc_order_id)
+                            # logger.warning(f"Cancelling associated order {assoc_order_id}.") # TODO: If this required ?
+                            
+                            self.orders[order_id]['associated_order'] = -1
+                            self.orders[assoc_order_id]['associated_order'] = -1
+                            # self._remove_order(assoc_order_id)
+                            self.broker.cancel_order(order_id=order_id)
                         self._remove_order(order_id)
                         continue
                     except Exception as e:
@@ -700,6 +703,9 @@ class WaveStrategy:
             except Exception as e:
                 logger.error(f"Error cancelling associated order {associated_order_id}: {e}")
 
+        # Once an order is completed - remove that order from tracking
+        self._remove_order(order_id)
+        
         self.place_wave_orders()
         self.print_current_status()
 
