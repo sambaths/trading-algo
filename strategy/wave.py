@@ -396,7 +396,6 @@ class WaveStrategy:
                     self.handle_order_update(self.handle_order_update_call_tracker_response_dict[buy_order_id])
             else:
                 logger.warning(f"Buy order failed, cancelling associated sell order {sell_order_id}")
-                self.broker.cancel_order(order_id=sell_order_id)
                 self._remove_order(sell_order_id)
                 del self.handle_order_update_call_tracker[sell_order_id]
                 del self.handle_order_update_call_tracker_response_dict[sell_order_id]
@@ -567,7 +566,7 @@ class WaveStrategy:
                             self.orders[order_id]['associated_order'] = -1
                             self.orders[assoc_order_id]['associated_order'] = -1
                             # self._remove_order(assoc_order_id)
-                            self.broker.cancel_order(order_id=order_id)
+                            # self.broker.cancel_order(order_id=order_id)
                         self._remove_order(order_id)
                         continue
                     except Exception as e:
@@ -699,7 +698,8 @@ class WaveStrategy:
                 logger.error(f"Error cancelling associated order {associated_order_id}: {e}")
 
         # Once an order is completed - remove that order from tracking
-        self._remove_order(order_id)
+        del self.orders[order_id]
+        self.order_tracker.remove_order(order_id)
         
         self.place_wave_orders()
         self.print_current_status()
@@ -710,6 +710,11 @@ class WaveStrategy:
         """
         if order_id in self.orders:
             logger.info(f"Removing order {order_id} from orders list | Order Info: {self.orders[order_id]}")
+            try:
+                self.broker.cancel_order(order_id=order_id)
+                logger.info(f"Cancelling order {order_id}")
+            except Exception as e:
+                logger.error(f"Error cancelling order {order_id}: {e}")
             del self.orders[order_id]
             self.order_tracker.remove_order(order_id)
         else:
@@ -778,7 +783,6 @@ class WaveStrategy:
                 self._remove_order(order_id)
                 # Cancel the associated order if the main order is cancelled anda if it exists
                 if associated_order_id != -1:
-                    self.broker.cancel_order(order_id=associated_order_id)
                     self._remove_order(associated_order_id)
 
             elif status == 'OPEN' or status == 6:
@@ -793,7 +797,6 @@ class WaveStrategy:
                 self._remove_order(order_id)
                 # Cancel the associated order if the main order is cancelled anda if it exists
                 if associated_order_id != -1:
-                    self.broker.cancel_order(order_id=associated_order_id)
                     self._remove_order(associated_order_id)
                 
             else:
