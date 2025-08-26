@@ -779,6 +779,7 @@ class WaveStrategy:
                 # Cancel the associated order if the main order is cancelled anda if it exists
                 if associated_order_id != -1:
                     self.broker.cancel_order(order_id=associated_order_id)
+                    self._remove_order(associated_order_id)
 
             elif status == 'OPEN' or status == 6:
                 # Update order details
@@ -793,6 +794,7 @@ class WaveStrategy:
                 # Cancel the associated order if the main order is cancelled anda if it exists
                 if associated_order_id != -1:
                     self.broker.cancel_order(order_id=associated_order_id)
+                    self._remove_order(associated_order_id)
                 
             else:
                 logger.info(f"Order {order_id} status: {status} | NOT HANDLED")
