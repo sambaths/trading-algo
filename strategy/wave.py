@@ -1,9 +1,4 @@
 
-"""
-Wave Trading System - Complete Version
-Restructured from original script for better readability and integrated
-with dynamic delta-based risk management and active order monitoring.
-"""
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -770,6 +765,7 @@ class WaveStrategy:
             self.handle_order_update_call_tracker[order_id] = True
             order_info = self.orders[order_id]
             status = order_data.get('status', order_data.get('orders', {}).get('status', 'N/A'))
+            associated_order_id = order_data.get('associated_order', order_data.get('orders', {}).get('associated_order', 'N/A'))
             
             if status == 'COMPLETE' or status == 2: # TODO: Check this - this is for fyers and zerodha
                 logger.info(f"Order {order_id} executed successfully")
@@ -780,6 +776,9 @@ class WaveStrategy:
             elif status == 'CANCELLED' or status == 1:
                 logger.info(f"Order {order_id} was cancelled")
                 self._remove_order(order_id)
+                # Cancel the associated order if the main order is cancelled anda if it exists
+                if associated_order_id != -1:
+                    self.broker.cancel_order(order_id=associated_order_id)
 
             elif status == 'OPEN' or status == 6:
                 # Update order details
@@ -791,6 +790,9 @@ class WaveStrategy:
             elif status == 'REJECTED' or status == 5:
                 logger.warning(f"Order {order_id} was rejected, Reason - {order_data.get('status_message', order_data.get('orders', {}).get('message', 'N/A'))}")
                 self._remove_order(order_id)
+                # Cancel the associated order if the main order is cancelled anda if it exists
+                if associated_order_id != -1:
+                    self.broker.cancel_order(order_id=associated_order_id)
                 
             else:
                 logger.info(f"Order {order_id} status: {status} | NOT HANDLED")
