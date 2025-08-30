@@ -237,7 +237,7 @@ class ZerodhaDriver(BrokerDriver):
             )
             resp = OrderResponse(status="ok", order_id=str(order_id), raw={"order_id": order_id})
             # Optional: immediately notify via callback that order placement succeeded
-            if isinstance(resp, dict) and resp.get("s") == "ok":
+            if isinstance(resp, OrderResponse) and resp.status == "ok":
                 if getattr(self, "_on_order_update_cb", None):
                     try:
                         self._on_order_update_cb(None, {"event": "order_update", "status": "ok", "order_id": str(order_id), "message": None, "raw": {"order_id": order_id}})
@@ -245,10 +245,10 @@ class ZerodhaDriver(BrokerDriver):
                         pass
                 return resp
             
-            if isinstance(resp, dict) and resp.get("s") == "error":
-                return OrderResponse(status="error", order_id=str(resp.get("id") or resp.get("order_id")), raw=resp if isinstance(resp, dict) else None)
+            if isinstance(resp, OrderResponse) and resp.status == "error":
+                return OrderResponse(status="error", order_id=str(resp.order_id), raw=resp.to_dict() if isinstance(resp, OrderResponse) else None)
             
-            return OrderResponse(status="error", order_id=-1, message=str(resp), raw=resp if isinstance(resp, dict) else None)
+            return OrderResponse(status="error", order_id=-1, message=str(resp), raw=resp.to_dict() if isinstance(resp, OrderResponse) else None)
         except Exception as e:  # noqa: BLE001
             # Emit synthetic order error update to mimic broker event stream for testing
             if getattr(self, "_on_order_update_cb", None):

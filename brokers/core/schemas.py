@@ -51,6 +51,14 @@ class OrderResponse:
     message: Optional[str] = None
     raw: Optional[Dict[str, Any]] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "order_id": self.order_id,
+            "message": self.message,
+            "raw": self.raw,
+        }
+
 
 @dataclass
 class Position:
