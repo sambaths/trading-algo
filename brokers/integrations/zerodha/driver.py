@@ -361,7 +361,7 @@ class ZerodhaDriver(BrokerDriver):
                 })
             return out
         except Exception as e:
-            print(e)
+            print(f"Error getting history: {e}")
             return []
 
     # --- Instruments ---
