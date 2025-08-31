@@ -308,7 +308,6 @@ class ZerodhaDriver(BrokerDriver):
         exch, tradingsymbol = symbol.split(":", 1)
         # Normalize common interval aliases to Kite format
         imap = {
-            "1m": "1minute",
             "3m": "3minute",
             "5m": "5minute",
             "10m": "10minute",
@@ -317,11 +316,12 @@ class ZerodhaDriver(BrokerDriver):
             "60m": "60minute",
             "1d": "day",
             "day": "day",
-            "week": "week",
-            "month": "month",
         }
         key = interval.strip().lower()
-        interval_kite = imap.get(key, interval)
+        interval_kite = imap.get(key, None)
+
+        if interval_kite is None:
+            raise Exception(f"Invalid interval: {interval}")
         try:
             try:
                 instruments = self._kite.instruments(exch)
@@ -360,7 +360,8 @@ class ZerodhaDriver(BrokerDriver):
                     "volume": int(c.get("volume", 0)) if c.get("volume") is not None else None,
                 })
             return out
-        except Exception:
+        except Exception as e:
+            print(e)
             return []
 
     # --- Instruments ---
